@@ -1,11 +1,22 @@
 .vscode/
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
+!.env.*.example
+*.env
+!*.env.example
 .python-version
 .venv/
 wheelhouse/
 build/
 .python-version
+# Log files and folders
 log/
+logs/
+*.log
+**/*log*/
+**/*logs*/
 test*
 cache/
 ignore/

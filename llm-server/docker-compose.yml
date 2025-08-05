@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  # Ollama service for running LLMs
+  ollama:
+    image: ollama/ollama:latest
+    container_name: agentsociety-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./models:/models
+    ports:
+      - "11434:11434"  # Ollama default port - usually not conflicting
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_HOST=0.0.0.0
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 8G
+    restart: unless-stopped
+    networks:
+      - llm-network
+
+  # LLM API Gateway - provides unified interface and additional features
+  llm-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    container_name: agentsociety-llm-gateway
+    ports:
+      - "8180:8080"  # Changed from 8080 to 8180
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - API_KEY=${API_KEY:-default-key-change-in-production}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis-password}@redis:6379
+      - ENABLE_CACHE=true
+      - CACHE_TTL=3600
+      - MAX_CONCURRENT_REQUESTS=10
+      - REQUEST_TIMEOUT=120
+      - LOG_LEVEL=INFO
+    depends_on:
+      - ollama
+      - redis
+    restart: unless-stopped
+    networks:
+      - llm-network
+
+  # Redis for caching LLM responses
+  redis:
+    image: redis:7-alpine
+    container_name: agentsociety-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis-password}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6479:6379"  # Changed from 6379 to 6479
+    restart: unless-stopped
+    networks:
+      - llm-network
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: agentsociety-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9190:9090"  # Changed from 9090 to 9190
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    restart: unless-stopped
+    networks:
+      - llm-network
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: agentsociety-grafana
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=redis-datasource
+    ports:
+      - "3100:3000"  # Changed from 3000 to 3100
+    restart: unless-stopped
+    networks:
+      - llm-network
+
+  # Model downloader - runs once to download models
+  model-downloader:
+    image: ollama/ollama:latest
+    container_name: agentsociety-model-downloader
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./scripts:/scripts
+    entrypoint: /scripts/download-models.sh
+    depends_on:
+      - ollama
+    networks:
+      - llm-network
+
+volumes:
+  ollama_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  llm-network:
+    driver: bridge
